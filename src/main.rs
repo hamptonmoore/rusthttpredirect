@@ -1,42 +1,40 @@
-use std::net::{TcpStream, TcpListener};
-use std::io::{Read, Write};
-use std::thread;
+use tokio::net::TcpListener;
+use tokio::prelude::*;
 
-fn handle_client(mut stream: TcpStream) {
-    let mut buf = [0u8 ;4096];
-    let req;
-    let path;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut listener = TcpListener::bind("0.0.0.0:8084").await?;
 
-    match stream.read(&mut buf) {
-        Ok(_) => {
-            req = String::from_utf8_lossy(&buf);
-            path = req.split(" ").nth(1).unwrap();
-            },
-        Err(e) => {
-            println!("Unable to read stream: {}", e);
-            path = "/";
-        },
-    }
+    loop {
+        let (mut socket, _) = listener.accept().await?;
 
-    let response = format!("{}{}{}", "HTTP/1.1 301 Moved Permanently\r\nLocation: https://hamptonmoore.com", path ,"\r\n\r\n");
-    
-    stream.write(response.as_bytes());
-}
+        tokio::spawn(async move {
+            let mut buf = [0; 1024];
 
-fn main() {
-    let listener = TcpListener::bind("0.0.0.0:8084").unwrap();
-    println!("Listening for connections on port {}", 8084);
+            let req;
+            let path;
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                thread::spawn(|| {
-                    handle_client(stream)
-                });
+            // In a loop, read data from the socket and write the data back.
+            match socket.read(&mut buf).await {
+                // socket closed
+                Ok(_) => {
+                    req = String::from_utf8_lossy(&buf);
+                    path = req.split(" ").nth(1).unwrap();
+                },
+                Err(e) => {
+                    path = "/";
+                    eprintln!("failed to read from socket; err = {:?}", e);                    
+                }
+            };
+
+            let mut message = b"HTTP/1.1 301 Moved Permanently\r\nContent-Length: 0\r\nLocation: https://hamptonmoore.com".to_vec();
+            message.append(&mut path.as_bytes().to_vec());
+            message.append(&mut b"\r\n\r\n".to_vec());
+            if let Err(e) = socket.write_all(&message).await {
+                eprintln!("failed to write to socket; err = {:?}", e);
+                return;
             }
-            Err(e) => {
-                println!("Unable to connect: {}", e);
-            }
-        }
+
+        });
     }
 }
